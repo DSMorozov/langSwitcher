@@ -60,6 +60,28 @@ final class LayoutMapper {
         return result
     }
     
+    /// True if `char` is a punctuation/symbol that, typed in `sourceLayoutID`, sits on the
+    /// physical key that produces a *letter* in `targetLayoutID`.
+    ///
+    /// Example (US → Russian): `,` `.` `;` `'` `[` `]` `` ` `` are the keys of б ю ж э х ъ ё.
+    /// When a word is typed in the wrong layout these characters are really letters of
+    /// that word, so they must not be treated as word boundaries.
+    /// Letters, digits and whitespace always return false.
+    static func convertsToLetter(
+        _ char: Character,
+        from sourceLayoutID: String,
+        to targetLayoutID: String
+    ) -> Bool {
+        guard !char.isLetter, !char.isNumber, !char.isWhitespace else { return false }
+        guard let sourceMap = LayoutCharacterMap.characterMap(for: sourceLayoutID),
+              let targetMap = LayoutCharacterMap.characterMap(for: targetLayoutID) else {
+            return false
+        }
+        return sourceMap.contains { physicalKey, producedChar in
+            producedChar == char && targetMap[physicalKey]?.isLetter == true
+        }
+    }
+
     /// Try to detect which layout a text was likely typed in
     /// Returns the layout ID with the highest confidence
     static func detectSourceLayout(

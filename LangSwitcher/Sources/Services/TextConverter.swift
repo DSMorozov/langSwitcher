@@ -128,8 +128,54 @@ final class TextConverter {
         return false
     }
     
+    // MARK: - Last Word Detection
+
+    /// Given the text between the start of the line and the caret, return the trailing
+    /// "last word" chunk (including any trailing whitespace/punctuation that follows it)
+    /// that should be converted. Returns nil if the line has no word.
+    ///
+    /// Word boundaries are whitespace and ordinary punctuation. Punctuation that sits on
+    /// a key which is a *letter* in the other layout (`,` `.` `;` `'` `[` `]` `` ` `` for
+    /// US → Russian, etc.) is part of the word, because such characters appear inside
+    /// wrong-layout words: "gj,tlf" is "победа", ".hbq" is "юрий", "[jhjij" is "хорошо".
+    func lastWordTail(in line: String) -> String? {
+        let chars = Array(line)
+
+        // The last whitespace-delimited token tells us which layout the user was typing in.
+        var tokenEnd = chars.count
+        while tokenEnd > 0, chars[tokenEnd - 1].isWhitespace { tokenEnd -= 1 }
+        guard tokenEnd > 0 else { return nil }
+        var tokenStart = tokenEnd
+        while tokenStart > 0, !chars[tokenStart - 1].isWhitespace { tokenStart -= 1 }
+        let token = String(chars[tokenStart..<tokenEnd])
+
+        let layoutIDs = settingsManager.enabledLayouts.map(\.id)
+        var isLetterKey: (Character) -> Bool = { _ in false }
+        if layoutIDs.count >= 2,
+           let source = LayoutMapper.detectSourceLayout(text: token, candidateLayouts: layoutIDs),
+           let target = layoutIDs.first(where: { $0 != source }) {
+            isLetterKey = { LayoutMapper.convertsToLetter($0, from: source, to: target) }
+        }
+        let isWordChar: (Character) -> Bool = { $0.isLetter || $0.isNumber || isLetterKey($0) }
+
+        // Scan right-to-left over runs of word characters. A run without a single
+        // letter (e.g. a stray "." or "123") is treated like a separator.
+        var end = chars.count
+        while end > 0 {
+            while end > 0, !isWordChar(chars[end - 1]) { end -= 1 }
+            guard end > 0 else { return nil }
+            var start = end
+            while start > 0, isWordChar(chars[start - 1]) { start -= 1 }
+            if chars[start..<end].contains(where: { $0.isLetter }) {
+                return String(chars[start...])
+            }
+            end = start
+        }
+        return nil
+    }
+
     // MARK: - Greedy Phrase Conversion
-    
+
     /// Given a line of text (from cursor to start of line), find the boundary where
     /// the wrong layout begins and return: (prefix to keep unchanged, suffix to convert).
     /// Returns nil if no wrong-layout portion found.

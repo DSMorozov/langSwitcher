@@ -311,4 +311,81 @@ final class TextConverterTests: XCTestCase {
         XCTAssertEqual(boundary?.keep, "")
         XCTAssertEqual(boundary?.convert, "ghbdtn rfr ltkf 123")
     }
+    
+    // MARK: - lastWordTail (last-word selection)
+    
+    func testLastWordTail_SimpleWord() {
+        XCTAssertEqual(converter.lastWordTail(in: "ghbdtn"), "ghbdtn")
+    }
+    
+    func testLastWordTail_TakesOnlyLastWord() {
+        XCTAssertEqual(converter.lastWordTail(in: "hello ghbdtn"), "ghbdtn")
+    }
+    
+    func testLastWordTail_KeepsTrailingSpace() {
+        XCTAssertEqual(converter.lastWordTail(in: "hello ghbdtn "), "ghbdtn ")
+    }
+    
+    func testLastWordTail_CommaInsideWordIsNotBoundary() {
+        // "gj,tlf" = "победа": the comma is the Russian "б" key
+        XCTAssertEqual(converter.lastWordTail(in: "hello gj,tlf"), "gj,tlf")
+        XCTAssertEqual(converter.convertSelectedText("gj,tlf"), "победа")
+    }
+    
+    func testLastWordTail_LeadingDotIsNotBoundary() {
+        // ".hbq" = "юрий": the dot is the Russian "ю" key
+        XCTAssertEqual(converter.lastWordTail(in: "hello .hbq"), ".hbq")
+    }
+    
+    func testLastWordTail_LeadingBracketIsNotBoundary() {
+        // "[jhjij" = "хорошо"
+        XCTAssertEqual(converter.lastWordTail(in: "a [jhjij"), "[jhjij")
+        XCTAssertEqual(converter.convertSelectedText("[jhjij"), "хорошо")
+    }
+    
+    func testLastWordTail_TrailingLetterKeyPunctuationIsPartOfWord() {
+        // "ghbdtn," → trailing "," is the "б" key
+        XCTAssertEqual(converter.lastWordTail(in: "hello ghbdtn,"), "ghbdtn,")
+    }
+    
+    func testLastWordTail_MultipleLetterKeyPunctuation() {
+        // "k.,jdm" = "любовь"
+        XCTAssertEqual(converter.lastWordTail(in: "x k.,jdm"), "k.,jdm")
+        XCTAssertEqual(converter.convertSelectedText("k.,jdm"), "любовь")
+    }
+    
+    func testLastWordTail_OrdinaryTrailingPunctuationIsKept() {
+        // "?" is a plain punctuation mark (not a letter in Russian): word is still found
+        XCTAssertEqual(converter.lastWordTail(in: "hello ghbdtn?"), "ghbdtn?")
+        XCTAssertEqual(converter.lastWordTail(in: "hello (ghbdtn)"), "ghbdtn)")
+    }
+    
+    func testLastWordTail_OrdinaryPunctuationStopsWord() {
+        // "(" is not a letter key — it ends the word on the left
+        XCTAssertEqual(converter.lastWordTail(in: "(ghbdtn"), "ghbdtn")
+        // "-" and "/" are not letter keys either
+        XCTAssertEqual(converter.lastWordTail(in: "foo-ghbdtn"), "ghbdtn")
+    }
+    
+    func testLastWordTail_Cyrillic() {
+        XCTAssertEqual(converter.lastWordTail(in: "привет руддщ"), "руддщ")
+        XCTAssertEqual(converter.lastWordTail(in: "привет руддщ "), "руддщ ")
+    }
+    
+    func testLastWordTail_CyrillicQuotesAreNotLetterKeys() {
+        // In the Russian layout `"` is Shift+2 (not a letter in English) → plain punctuation
+        XCTAssertEqual(converter.lastWordTail(in: "привет \"руддщ\""), "руддщ\"")
+    }
+    
+    func testLastWordTail_NoWord() {
+        XCTAssertNil(converter.lastWordTail(in: ""))
+        XCTAssertNil(converter.lastWordTail(in: "   "))
+        XCTAssertNil(converter.lastWordTail(in: "123"))
+        XCTAssertNil(converter.lastWordTail(in: "..."))
+    }
+    
+    func testLastWordTail_StrayPunctuationRunIsSkipped() {
+        // A run without any letter ("." here) must not hide the real word before it
+        XCTAssertEqual(converter.lastWordTail(in: "ghbdtn)."), "ghbdtn).")
+    }
 }

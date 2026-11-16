@@ -34,17 +34,10 @@ final class AccessibilityService {
     /// Get selected text and replace it using clipboard-based approach.
     /// Returns false if no text was selected/copied.
     func getAndReplaceSelectedText(with converter: (String) -> String?) -> Bool {
-        let pasteboard = NSPasteboard.general
         let savedContents = savePasteboard()
         
         // Copy selected text (⌘C)
-        pasteboard.clearContents()
-        let copyBase = pasteboard.changeCount
-        simulateCopy()
-        waitForPasteboardChange(since: copyBase, timeout: 0.5)
-        
-        guard let selectedText = pasteboard.string(forType: .string),
-              !selectedText.isEmpty else {
+        guard let selectedText = copySelectionText() else {
             NSLog("[LangSwitcher] getAndReplaceSelectedText: no text on clipboard after ⌘C")
             restorePasteboard(savedContents)
             return false
@@ -72,7 +65,6 @@ final class AccessibilityService {
     /// paste the result back. The converter is responsible for determining
     /// which portion to convert and returning the full replacement text.
     func selectLineAndReplace(with converter: (String) -> String?) -> Bool {
-        let pasteboard = NSPasteboard.general
         let savedContents = savePasteboard()
         
         NSLog("[LangSwitcher] selectLineAndReplace: selecting to line start (⌘⇧←)...")
@@ -82,13 +74,7 @@ final class AccessibilityService {
         usleep(150_000) // 150ms
         
         // Copy the selection
-        pasteboard.clearContents()
-        let copyBase = pasteboard.changeCount
-        simulateCopy()
-        waitForPasteboardChange(since: copyBase, timeout: 0.5)
-        
-        guard let selectedText = pasteboard.string(forType: .string),
-              !selectedText.isEmpty else {
+        guard let selectedText = copySelectionText() else {
             NSLog("[LangSwitcher] selectLineAndReplace: no text copied, deselecting")
             simulateRightArrow()
             restorePasteboard(savedContents)
@@ -114,49 +100,79 @@ final class AccessibilityService {
     
     // MARK: - Smart Selection (Last Word)
     
-    /// When no text is selected, select the last typed word/chunk via
-    /// Option+Shift+Left (select word left), copy it, convert, paste back.
-    /// This selects the word just before the cursor.
-    func selectAndReplaceLastWord(with converter: (String) -> String?) -> Bool {
-        let pasteboard = NSPasteboard.general
+    /// Longest word (in characters) we are willing to re-select with ⇧←.
+    private let maxLastWordLength = 200
+    
+    /// When no text is selected, convert the last typed word.
+    ///
+    /// We do NOT rely on the target app's own word-left (⌥←) semantics: apps disagree
+    /// about word boundaries (Cocoa vs. Chromium/Electron vs. VS Code), and all of them
+    /// treat `,` `.` `;` `'` `[` `]` as separators even though in the other layout those
+    /// keys are letters (б ю ж э х ъ). Instead:
+    ///   1. select to line start (⌘⇧←) and copy the text before the caret;
+    ///   2. let `locateWord` decide which trailing part of it is the word;
+    ///   3. re-select exactly that many characters (→ then ⇧← × N) and verify by copying;
+    ///   4. convert and paste.
+    func selectAndReplaceLastWord(
+        locateWord: (String) -> String?,
+        convert: (String) -> String?
+    ) -> Bool {
         let savedContents = savePasteboard()
         
-        NSLog("[LangSwitcher] selectAndReplaceLastWord: selecting word left...")
+        NSLog("[LangSwitcher] selectAndReplaceLastWord: selecting to line start...")
+        simulateSelectToLineStart()
+        usleep(150_000) // give the target app (esp. Electron) time to apply the selection
         
-        // First, try selecting last word: Shift+Option+Left arrow selects one word left
-        simulateSelectWordLeft()
-        usleep(150_000) // 150ms — give target app time to process selection
-        
-        // Copy the selection
-        pasteboard.clearContents()
-        let copyBase = pasteboard.changeCount
-        simulateCopy()
-        waitForPasteboardChange(since: copyBase, timeout: 0.5)
-        
-        guard let selectedText = pasteboard.string(forType: .string),
-              !selectedText.isEmpty else {
-            NSLog("[LangSwitcher] selectAndReplaceLastWord: no text copied after selection+copy, deselecting")
+        guard let line = copySelectionText() else {
+            NSLog("[LangSwitcher] selectAndReplaceLastWord: nothing before the caret, deselecting")
             simulateRightArrow()
             restorePasteboard(savedContents)
             return false
         }
         
-        NSLog("[LangSwitcher] selectAndReplaceLastWord: copied word = '\(selectedText)'")
+        guard let word = locateWord(line), !word.isEmpty, word.count <= maxLastWordLength else {
+            NSLog("[LangSwitcher] selectAndReplaceLastWord: no word found in '\(line)', deselecting")
+            simulateRightArrow()
+            restorePasteboard(savedContents)
+            return false
+        }
         
-        guard let convertedText = converter(selectedText) else {
+        // Narrow the selection from "whole line" to just the word.
+        if word != line {
+            NSLog("[LangSwitcher] selectAndReplaceLastWord: re-selecting last \(word.count) chars")
+            simulateRightArrow() // collapse to the caret position (selection end)
+            usleep(50_000)
+            for _ in 0..<word.count {
+                simulateSelectCharLeft()
+            }
+            usleep(120_000)
+            
+            guard let verified = copySelectionText(),
+                  Self.normalizedForComparison(verified) == Self.normalizedForComparison(word) else {
+                NSLog("[LangSwitcher] selectAndReplaceLastWord: selection mismatch, aborting without changes")
+                simulateRightArrow()
+                restorePasteboard(savedContents)
+                return false
+            }
+        }
+        
+        NSLog("[LangSwitcher] selectAndReplaceLastWord: word = '\(word)'")
+        
+        guard let convertedText = convert(word) else {
             NSLog("[LangSwitcher] selectAndReplaceLastWord: converter returned nil, deselecting")
-            // No conversion needed — deselect by pressing Right arrow
             simulateRightArrow()
             restorePasteboard(savedContents)
             return false
         }
         
         NSLog("[LangSwitcher] selectAndReplaceLastWord: pasting converted = '\(convertedText)'")
-        
-        // Paste converted text (replaces the selection)
         pasteAndScheduleRestore(convertedText, saved: savedContents)
-        
         return true
+    }
+    
+    /// Browsers/Electron may turn spaces into NBSP and CRLF into LF when copying.
+    static func normalizedForComparison(_ text: String) -> String {
+        String(text.map { $0.isWhitespace ? " " : $0 })
     }
     
     // MARK: - Keyboard Simulation
@@ -203,16 +219,61 @@ final class AccessibilityService {
         simulateKeystroke(virtualKey: 0x7B, modifiers: [.maskShift, .maskCommand]) // Left arrow + Cmd+Shift
     }
     
-    /// Simulate Shift+Option+Left to select one word to the left
-    private func simulateSelectWordLeft() {
-        NSLog("[LangSwitcher] Simulating ⇧⌥←...")
-        simulateKeystroke(virtualKey: 0x7B, modifiers: [.maskShift, .maskAlternate]) // Left arrow
+    /// Simulate Shift+Left to extend the selection by one character to the left
+    private func simulateSelectCharLeft() {
+        simulateKeystroke(virtualKey: 0x7B, modifiers: .maskShift) // Left arrow + Shift
     }
     
     /// Simulate Right arrow to deselect (move cursor to end of selection)
     private func simulateRightArrow() {
         NSLog("[LangSwitcher] Simulating →...")
         simulateKeystroke(virtualKey: 0x7C) // Right arrow, no modifiers
+    }
+    
+    // MARK: - Copy Selection
+    
+    /// Copy the current selection with ⌘C and return its plain text.
+    /// Returns nil if nothing was copied — or if the app copied the *current line*
+    /// because the selection was empty (VS Code / Cursor do this by default), which
+    /// would otherwise be mistaken for a real selection and pasted back as junk.
+    private func copySelectionText() -> String? {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let copyBase = pasteboard.changeCount
+        simulateCopy()
+        waitForPasteboardChange(since: copyBase, timeout: 0.5)
+        
+        guard let text = pasteboard.string(forType: .string), !text.isEmpty else {
+            return nil
+        }
+        if Self.isEmptySelectionLineCopy(pasteboard.pasteboardItems ?? []) {
+            NSLog("[LangSwitcher] copySelectionText: app copied the current line (empty selection), ignoring")
+            return nil
+        }
+        return text
+    }
+    
+    /// VS Code (Monaco) attaches `{"isFromEmptySelection":true,...}` as clipboard
+    /// metadata when ⌘C was pressed with no selection. Chromium stores such custom
+    /// data in `org.chromium.web-custom-data`, with strings encoded as UTF-16.
+    static func isEmptySelectionLineCopy(_ items: [NSPasteboardItem]) -> Bool {
+        for item in items {
+            for type in item.types {
+                guard let data = item.data(forType: type) else { continue }
+                if containsEmptySelectionMarker(data) { return true }
+            }
+        }
+        return false
+    }
+    
+    static func containsEmptySelectionMarker(_ data: Data) -> Bool {
+        let marker = "isFromEmptySelection\":true"
+        for encoding in [String.Encoding.utf16LittleEndian, .utf8] {
+            if let needle = marker.data(using: encoding), data.range(of: needle) != nil {
+                return true
+            }
+        }
+        return false
     }
     
     // MARK: - Pasteboard Save/Restore

@@ -597,4 +597,38 @@ final class LayoutMapperTests: XCTestCase {
         )
         XCTAssertEqual(result, "123")
     }
+    
+    // MARK: - convertsToLetter
+    
+    func testConvertsToLetter_USToRussianLetterKeys() {
+        let us = "com.apple.keylayout.US", ru = "com.apple.keylayout.Russian"
+        for ch in ",.;'[]`{}:\"<>~" as String {
+            XCTAssertTrue(LayoutMapper.convertsToLetter(ch, from: us, to: ru), "'\(ch)' should map to a letter")
+        }
+    }
+    
+    func testConvertsToLetter_USToRussianPlainPunctuation() {
+        let us = "com.apple.keylayout.US", ru = "com.apple.keylayout.Russian"
+        for ch in "?!@#$%^&*()-_=+/\\|" as String {
+            XCTAssertFalse(LayoutMapper.convertsToLetter(ch, from: us, to: ru), "'\(ch)' should stay punctuation")
+        }
+    }
+    
+    func testConvertsToLetter_LettersDigitsWhitespaceAreFalse() {
+        let us = "com.apple.keylayout.US", ru = "com.apple.keylayout.Russian"
+        for ch in "a1 \n" as String {
+            XCTAssertFalse(LayoutMapper.convertsToLetter(ch, from: us, to: ru))
+        }
+    }
+    
+    func testConvertsToLetter_RussianToUSHasNoLetterPunctuation() {
+        let us = "com.apple.keylayout.US", ru = "com.apple.keylayout.Russian"
+        for ch in ".,\"№;:?" as String {
+            XCTAssertFalse(LayoutMapper.convertsToLetter(ch, from: ru, to: us), "'\(ch)' should not map to a letter")
+        }
+    }
+    
+    func testConvertsToLetter_UnknownLayout() {
+        XCTAssertFalse(LayoutMapper.convertsToLetter(",", from: "com.example.klingon", to: "com.apple.keylayout.Russian"))
+    }
 }

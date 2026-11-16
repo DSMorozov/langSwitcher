@@ -144,20 +144,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var capturedInput: String?
         var capturedOutput: String?
         var capturedTargetLayout: String?
-        let success = accessibilityService.selectAndReplaceLastWord { [weak self] (text: String) -> String? in
-            guard let self = self else { return nil }
-            NSLog("[LangSwitcher] lastWord got: '\(text)'")
-            
-            if self.textConverter.looksLikeWrongLayout(text) {
-                capturedInput = text
-                if let info = self.textConverter.convertSelectedTextWithInfo(text) {
-                    capturedOutput = info.text
-                    capturedTargetLayout = info.targetLayoutID
-                    return info.text
+        let success = accessibilityService.selectAndReplaceLastWord(
+            locateWord: { [weak self] (line: String) -> String? in
+                self?.textConverter.lastWordTail(in: line)
+            },
+            convert: { [weak self] (text: String) -> String? in
+                guard let self = self else { return nil }
+                NSLog("[LangSwitcher] lastWord got: '\(text)'")
+
+                if self.textConverter.looksLikeWrongLayout(text) {
+                    capturedInput = text
+                    if let info = self.textConverter.convertSelectedTextWithInfo(text) {
+                        capturedOutput = info.text
+                        capturedTargetLayout = info.targetLayoutID
+                        return info.text
+                    }
                 }
+                return nil
             }
-            return nil
-        }
+        )
         
         if success {
             settingsManager.incrementConversionCount()
